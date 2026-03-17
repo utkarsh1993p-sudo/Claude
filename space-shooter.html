@@ -69,6 +69,77 @@
     white-space: nowrap;
     z-index: 10;
   }
+  /* Touch controls */
+  #touch-controls {
+    display: none;
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 180px;
+    pointer-events: none;
+    z-index: 15;
+  }
+  .touch-btn {
+    position: absolute;
+    pointer-events: auto;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+  #touch-fire {
+    right: 20px; bottom: 30px;
+    width: 70px; height: 70px;
+    background: rgba(0,255,255,0.25);
+    border: 2px solid #00ffff;
+    color: #00ffff;
+    font-size: 11px;
+  }
+  #touch-missile {
+    right: 100px; bottom: 55px;
+    width: 56px; height: 56px;
+    background: rgba(255,136,0,0.25);
+    border: 2px solid #ff8800;
+    color: #ff8800;
+    font-size: 10px;
+  }
+  #touch-nuke {
+    right: 100px; bottom: 0px;
+    width: 56px; height: 56px;
+    background: rgba(255,34,0,0.25);
+    border: 2px solid #ff2200;
+    color: #ff2200;
+    font-size: 10px;
+  }
+  #touch-joystick-area {
+    position: absolute;
+    left: 10px; bottom: 10px;
+    width: 160px; height: 160px;
+    pointer-events: auto;
+    touch-action: none;
+  }
+  #touch-joystick-base {
+    position: absolute;
+    left: 20px; bottom: 20px;
+    width: 120px; height: 120px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.08);
+    border: 2px solid rgba(255,255,255,0.2);
+  }
+  #touch-joystick-knob {
+    position: absolute;
+    left: 60px; bottom: 60px;
+    width: 44px; height: 44px;
+    margin-left: -22px; margin-bottom: -22px;
+    border-radius: 50%;
+    background: rgba(0,255,255,0.35);
+    border: 2px solid #00ffff;
+    pointer-events: none;
+  }
   #overlay {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -134,6 +205,16 @@
     </div>
   </div>
   <div id="controls-hint">WASD/Arrows: Move &nbsp;|&nbsp; Z: Shoot &nbsp;|&nbsp; X: Missile &nbsp;|&nbsp; C: Nuke &nbsp;|&nbsp; Hold for auto-fire</div>
+  <div id="touch-controls">
+    <div id="touch-joystick-area">
+      <div id="touch-joystick-base">
+        <div id="touch-joystick-knob"></div>
+      </div>
+    </div>
+    <div id="touch-fire" class="touch-btn">FIRE</div>
+    <div id="touch-missile" class="touch-btn">MSL</div>
+    <div id="touch-nuke" class="touch-btn">NUKE</div>
+  </div>
   <div id="overlay">
     <h1>SPACE DESTROYER</h1>
     <p style="color:#ff6644;font-size:16px;margin-bottom:16px;">The ugly aliens are invading! Exterminate them ALL!</p>
@@ -1110,6 +1191,27 @@ function gameLoop(timestamp) {
 }
 
 function update(dt) {
+  // Level transition timer must run even when state is 'levelup'
+  if (state === 'levelup') {
+    levelTransitionTimer -= dt;
+    if (levelTransitionTimer <= 0) {
+      level++;
+      if (level > 5) {
+        state = 'win';
+        showEndScreen(true);
+      } else {
+        setupLevel();
+        state = 'playing';
+      }
+    }
+    // Still update stars and particles during transition
+    for (let s of stars) { s.y += s.spd * dt; if (s.y > H) { s.y = 0; s.x = Math.random()*W; } }
+    for (let p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.97; p.vy *= 0.97; p.life -= dt; }
+    particles = particles.filter(p => p.life > 0);
+    if (shakeTimer > 0) shakeTimer -= dt;
+    if (nukeEffect) { if (nukeEffect.growing) { nukeEffect.r += 25*dt; if (nukeEffect.r >= nukeEffect.maxR) nukeEffect.growing = false; } else { nukeEffect.alpha -= 0.04*dt; if (nukeEffect.alpha <= 0) nukeEffect = null; } }
+    return;
+  }
   if (state !== 'playing') return;
 
   // Player movement
@@ -1118,6 +1220,11 @@ function update(dt) {
   if (keys['ArrowRight'] || keys['KeyD']) player.x += spd * dt;
   if (keys['ArrowUp'] || keys['KeyW']) player.y -= spd * dt;
   if (keys['ArrowDown'] || keys['KeyS']) player.y += spd * dt;
+  // Touch joystick movement
+  if (touchJoystick.active) {
+    player.x += touchJoystick.dx * spd * dt;
+    player.y += touchJoystick.dy * spd * dt;
+  }
   player.x = clamp(player.x, player.w/2, W - player.w/2);
   player.y = clamp(player.y, player.h/2, H - player.h/2);
 
@@ -1126,7 +1233,7 @@ function update(dt) {
 
   // Shooting
   player.shootCooldown -= dt;
-  if ((keys['KeyZ'] || keys['Space']) && player.shootCooldown <= 0) {
+  if ((keys['KeyZ'] || keys['Space'] || touchFiring) && player.shootCooldown <= 0) {
     player.shootCooldown = 6;
     bullets.push({ x: player.x - player.w*0.28, y: player.y - player.h*0.4, vy: -12, fromPlayer: true, r: 5 });
     bullets.push({ x: player.x + player.w*0.28, y: player.y - player.h*0.4, vy: -12, fromPlayer: true, r: 5 });
@@ -1280,8 +1387,9 @@ function update(dt) {
     explosion(boss.x, boss.y, '#ff8800', 60, 10);
     explosion(boss.x, boss.y, '#ffffff', 30, 8);
     explosion(boss.x, boss.y, '#ff4400', 40, 12);
+    const bossDeathX = boss.x, bossDeathY = boss.y;
     for (let i = 0; i < 5; i++) {
-      setTimeout(() => explosion(boss.x + rnd(-80,80), boss.y + rnd(-60,60), '#ff6600', 20, 6), i*200);
+      setTimeout(() => explosion(bossDeathX + rnd(-80,80), bossDeathY + rnd(-60,60), '#ff6600', 20, 6), i*200);
     }
     score += 500 * level;
     kills++;
@@ -1294,21 +1402,6 @@ function update(dt) {
 
   // Enemy drops off screen
   enemies = enemies.filter(e => e.y < H + 100);
-
-  // Level up
-  if (state === 'levelup') {
-    levelTransitionTimer -= dt;
-    if (levelTransitionTimer <= 0) {
-      level++;
-      if (level > 5) {
-        state = 'win';
-        showEndScreen(true);
-      } else {
-        setupLevel();
-        state = 'playing';
-      }
-    }
-  }
 
   // Nuke effect
   if (nukeEffect) {
@@ -1469,6 +1562,89 @@ function render() {
   }
 
   ctx.restore();
+}
+
+// ─── TOUCH CONTROLS ──────────────────────────────────────────────────────────
+const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+let touchJoystick = { active: false, id: null, cx: 0, cy: 0, dx: 0, dy: 0 };
+let touchFiring = false;
+
+if (isTouchDevice) {
+  document.getElementById('touch-controls').style.display = 'block';
+  document.getElementById('controls-hint').textContent = 'Joystick: Move | FIRE: Shoot | MSL: Missile | NUKE: Nuke';
+
+  // Prevent scrolling/zooming on the game
+  document.addEventListener('touchmove', e => { if (e.target.closest('#gameContainer')) e.preventDefault(); }, { passive: false });
+  canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+
+  // Joystick
+  const joystickArea = document.getElementById('touch-joystick-area');
+  const joystickBase = document.getElementById('touch-joystick-base');
+  const joystickKnob = document.getElementById('touch-joystick-knob');
+
+  joystickArea.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const touch = e.changedTouches[0];
+    touchJoystick.active = true;
+    touchJoystick.id = touch.identifier;
+    const rect = joystickBase.getBoundingClientRect();
+    touchJoystick.cx = rect.left + rect.width / 2;
+    touchJoystick.cy = rect.top + rect.height / 2;
+    updateJoystick(touch);
+  }, { passive: false });
+
+  document.addEventListener('touchmove', e => {
+    if (!touchJoystick.active) return;
+    for (let t of e.changedTouches) {
+      if (t.identifier === touchJoystick.id) {
+        updateJoystick(t);
+        break;
+      }
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', e => {
+    for (let t of e.changedTouches) {
+      if (t.identifier === touchJoystick.id) {
+        touchJoystick.active = false;
+        touchJoystick.dx = 0;
+        touchJoystick.dy = 0;
+        joystickKnob.style.transform = 'translate(0px, 0px)';
+        break;
+      }
+    }
+  });
+
+  function updateJoystick(touch) {
+    let dx = touch.clientX - touchJoystick.cx;
+    let dy = touch.clientY - touchJoystick.cy;
+    const maxR = 50;
+    const d = Math.hypot(dx, dy);
+    if (d > maxR) { dx = dx / d * maxR; dy = dy / d * maxR; }
+    touchJoystick.dx = dx / maxR; // -1 to 1
+    touchJoystick.dy = dy / maxR;
+    joystickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+  }
+
+  // Fire button (hold for auto-fire)
+  const fireBtn = document.getElementById('touch-fire');
+  fireBtn.addEventListener('touchstart', e => { e.preventDefault(); touchFiring = true; }, { passive: false });
+  fireBtn.addEventListener('touchend', e => { touchFiring = false; });
+  fireBtn.addEventListener('touchcancel', e => { touchFiring = false; });
+
+  // Missile button
+  const mslBtn = document.getElementById('touch-missile');
+  mslBtn.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (state === 'playing') fireMissile();
+  }, { passive: false });
+
+  // Nuke button
+  const nukeBtn = document.getElementById('touch-nuke');
+  nukeBtn.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (state === 'playing') fireNuke();
+  }, { passive: false });
 }
 
 // Init stars on load
