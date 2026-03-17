@@ -76,6 +76,13 @@
     white-space: nowrap;
     z-index: 10;
   }
+  @media (max-width: 600px) {
+    #controls-hint { display: none; }
+    .weapon-key { display: none; }
+    .ui-panel { min-width: 110px; padding: 4px 6px; }
+    .ui-label { font-size: 9px; }
+    .ui-value { font-size: 11px; }
+  }
   /* Touch controls - rendered on canvas, no HTML needed */
   #overlay {
     position: absolute;
@@ -156,7 +163,7 @@
     </div>
     <p style="color:#888;">Every level ends with a terrifying BOSS fight</p>
     <p style="color:#888;">Defeat the boss to advance to the next level</p>
-    <button id="startBtn" onclick="startGame()">LAUNCH →</button>
+    <button id="startBtn" onclick="startGame()" ontouchend="event.preventDefault();startGame()">LAUNCH →</button>
   </div>
 </div>
 
@@ -1034,7 +1041,7 @@ function updateBoss(b, dt) {
     return;
   }
   // Rage at 50% hp
-  b.rage = b.hp < b.maxHp * 0.5;
+  if (!b.rage && b.hp < b.maxHp * 0.5) b.rage = true;
   const spd = b.rage ? 2.5 : 1.5;
   b.x += b.vx * spd;
   if (b.x < b.w || b.x > W-b.w) b.vx *= -1;
@@ -1381,10 +1388,14 @@ function showEndScreen(win) {
     <div class="big-score">${score.toLocaleString()} pts</div>
     <p>Levels cleared: ${win ? 5 : level-1} / 5</p>
     <p>Total kills: ${kills}</p>
-    <button id="startBtn" onclick="startGame()" style="margin-top:20px;padding:12px 36px;font-size:18px;font-family:'Courier New',monospace;background:transparent;border:2px solid #00ffff;color:#00ffff;cursor:pointer;letter-spacing:3px;text-transform:uppercase;">
+    <button id="startBtn" style="margin-top:20px;padding:14px 36px;font-size:18px;font-family:'Courier New',monospace;background:transparent;border:2px solid #00ffff;color:#00ffff;cursor:pointer;letter-spacing:3px;text-transform:uppercase;-webkit-tap-highlight-color:transparent;">
       ${win ? 'PLAY AGAIN' : 'TRY AGAIN'}
     </button>
   `;
+  // Attach click/touchend handler to new button immediately after creating it
+  const btn = document.getElementById('startBtn');
+  btn.addEventListener('click', startGame);
+  btn.addEventListener('touchend', e => { e.preventDefault(); startGame(); });
 }
 
 // ─── RENDER ───────────────────────────────────────────────────────────────────
@@ -1511,192 +1522,164 @@ function render() {
 
 // ─── TOUCH CONTROLS ──────────────────────────────────────────────────────────
 const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-let touchJoystick = { active: false, id: -1, cx: 0, cy: 0, dx: 0, dy: 0, knobX: 0, knobY: 0 };
+
+// Touch state - simple flat vars, no nesting
+let touchJoystick = { active: false, id: null, cx: 0, cy: 0, dx: 0, dy: 0, knobX: 0, knobY: 0 };
 let touchFiring = false;
-let touchFireId = -1;
-let activeTouches = {}; // track all active touches by identifier
+let touchFireId = null;
 
-// Touch button definitions in game (canvas) coordinates
+// Touch buttons in game (canvas) coordinates — large hit areas for fingers
 const touchBtns = {
-  fire:    { cx: W - 65,  cy: H - 70,  r: 38, label: 'FIRE', color: '#00ffff', bg: 'rgba(0,255,255,0.2)' },
-  missile: { cx: W - 140, cy: H - 50,  r: 30, label: 'MSL',  color: '#ff8800', bg: 'rgba(255,136,0,0.2)' },
-  nuke:    { cx: W - 140, cy: H - 120, r: 30, label: 'NUKE', color: '#ff2200', bg: 'rgba(255,34,0,0.2)' },
+  fire:    { cx: W - 65,  cy: H - 70,  r: 42, label: 'FIRE', color: '#00ffff', bg: 'rgba(0,255,255,0.18)' },
+  missile: { cx: W - 148, cy: H - 42,  r: 34, label: 'MSL',  color: '#ff8800', bg: 'rgba(255,136,0,0.18)' },
+  nuke:    { cx: W - 148, cy: H - 126, r: 34, label: 'NUKE', color: '#ff2200', bg: 'rgba(255,34,0,0.18)' },
 };
-// Joystick config in game coords
-const joyConf = { cx: 100, cy: H - 90, baseR: 60, knobR: 24, maxDist: 50 };
+// Default joystick position shown when idle
+const joyBase = { cx: 100, cy: H - 95, r: 58, knobR: 26, maxDist: 52 };
 
-// Convert touch screen coords to game canvas coords
-function touchToGame(touch) {
+// Convert raw clientX/Y to game canvas coordinates
+function clientToGame(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   return {
-    x: (touch.clientX - rect.left) / canvasScale,
-    y: (touch.clientY - rect.top) / canvasScale
+    x: (clientX - rect.left) / canvasScale,
+    y: (clientY - rect.top)  / canvasScale
   };
 }
 
-function hitBtn(gp, btn) {
-  return Math.hypot(gp.x - btn.cx, gp.y - btn.cy) < btn.r + 15;
+if (isTouchDevice) {
+  // Listen on the whole document so touches outside scaled canvas still work,
+  // but gate logic on whether the point is within the canvas.
+  document.addEventListener('touchstart',  onTouchStart,  { passive: false });
+  document.addEventListener('touchmove',   onTouchMove,   { passive: false });
+  document.addEventListener('touchend',    onTouchEnd,    { passive: false });
+  document.addEventListener('touchcancel', onTouchEnd,    { passive: false });
 }
 
-// Set up all touch handling
-(function setupTouch() {
-  if (!isTouchDevice) return;
+function onTouchStart(e) {
+  // Let the LAUNCH / PLAY AGAIN button work normally
+  const tgt = e.target;
+  if (tgt && (tgt.id === 'startBtn' || (tgt.closest && tgt.closest('#overlay')))) return;
 
-  document.getElementById('controls-hint').textContent = 'Touch: Drag left side to move | Right side: FIRE / MSL / NUKE';
+  e.preventDefault();
+  if (state !== 'playing') return;
 
-  // Also make the start button respond to touchend directly (some mobile browsers block onclick after preventDefault)
-  document.addEventListener('click', e => {
-    if (e.target && (e.target.id === 'startBtn' || e.target.closest('#startBtn'))) {
-      startGame();
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    const t  = e.changedTouches[i];
+    const gp = clientToGame(t.clientX, t.clientY);
+
+    // Ignore if touch lands outside the canvas
+    if (gp.x < 0 || gp.x > W || gp.y < 0 || gp.y > H) continue;
+
+    // ── Right-side action buttons ──────────────────────────────────────────
+    if (Math.hypot(gp.x - touchBtns.fire.cx,    gp.y - touchBtns.fire.cy)    <= touchBtns.fire.r + 10) {
+      touchFiring = true;
+      touchFireId = t.identifier;
+      continue;
     }
-  });
+    if (Math.hypot(gp.x - touchBtns.missile.cx, gp.y - touchBtns.missile.cy) <= touchBtns.missile.r + 10) {
+      fireMissile();
+      continue;
+    }
+    if (Math.hypot(gp.x - touchBtns.nuke.cx,    gp.y - touchBtns.nuke.cy)    <= touchBtns.nuke.r + 10) {
+      fireNuke();
+      continue;
+    }
 
-  // Prevent default on canvas touches to stop scrolling/zooming/long-press
-  canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
-  canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-  canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
-  canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
-
-  // Also prevent default on body to stop pull-to-refresh etc
-  document.body.addEventListener('touchmove', e => {
-    if (state === 'playing') e.preventDefault();
-  }, { passive: false });
-
-  function handleTouchStart(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (state !== 'playing') return;
-
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const touch = e.changedTouches[i];
-      const gp = touchToGame(touch);
-      activeTouches[touch.identifier] = { role: null };
-
-      // Check fire button
-      if (hitBtn(gp, touchBtns.fire)) {
-        touchFiring = true;
-        touchFireId = touch.identifier;
-        activeTouches[touch.identifier].role = 'fire';
-        continue;
-      }
-      // Check missile button
-      if (hitBtn(gp, touchBtns.missile)) {
-        fireMissile();
-        activeTouches[touch.identifier].role = 'missile';
-        continue;
-      }
-      // Check nuke button
-      if (hitBtn(gp, touchBtns.nuke)) {
-        fireNuke();
-        activeTouches[touch.identifier].role = 'nuke';
-        continue;
-      }
-      // Any touch on left ~60% of screen = joystick
-      if (gp.x < W * 0.6 && !touchJoystick.active) {
-        touchJoystick.active = true;
-        touchJoystick.id = touch.identifier;
-        touchJoystick.cx = gp.x;
-        touchJoystick.cy = gp.y;
-        touchJoystick.dx = 0;
-        touchJoystick.dy = 0;
-        touchJoystick.knobX = gp.x;
-        touchJoystick.knobY = gp.y;
-        activeTouches[touch.identifier].role = 'joystick';
-      }
+    // ── Left-side joystick — activate at finger position ───────────────────
+    if (!touchJoystick.active) {
+      touchJoystick.active = true;
+      touchJoystick.id     = t.identifier;
+      touchJoystick.cx     = gp.x;
+      touchJoystick.cy     = gp.y;
+      touchJoystick.dx     = 0;
+      touchJoystick.dy     = 0;
+      touchJoystick.knobX  = gp.x;
+      touchJoystick.knobY  = gp.y;
     }
   }
+}
 
-  function handleTouchMove(e) {
-    e.preventDefault();
-    e.stopPropagation();
+function onTouchMove(e) {
+  e.preventDefault();
+  if (state !== 'playing') return;
 
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const touch = e.changedTouches[i];
-      // Joystick drag
-      if (touch.identifier === touchJoystick.id && touchJoystick.active) {
-        const gp = touchToGame(touch);
-        let dx = gp.x - touchJoystick.cx;
-        let dy = gp.y - touchJoystick.cy;
-        const d = Math.hypot(dx, dy);
-        if (d > joyConf.maxDist) {
-          dx = dx / d * joyConf.maxDist;
-          dy = dy / d * joyConf.maxDist;
-        }
-        touchJoystick.dx = dx / joyConf.maxDist;
-        touchJoystick.dy = dy / joyConf.maxDist;
-        touchJoystick.knobX = touchJoystick.cx + dx;
-        touchJoystick.knobY = touchJoystick.cy + dy;
-      }
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    const t = e.changedTouches[i];
+    if (!touchJoystick.active || t.identifier !== touchJoystick.id) continue;
+
+    const gp = clientToGame(t.clientX, t.clientY);
+    let dx = gp.x - touchJoystick.cx;
+    let dy = gp.y - touchJoystick.cy;
+    const d = Math.hypot(dx, dy);
+    if (d > joyBase.maxDist) { dx = dx / d * joyBase.maxDist; dy = dy / d * joyBase.maxDist; }
+    touchJoystick.dx    = dx / joyBase.maxDist;
+    touchJoystick.dy    = dy / joyBase.maxDist;
+    touchJoystick.knobX = touchJoystick.cx + dx;
+    touchJoystick.knobY = touchJoystick.cy + dy;
+  }
+}
+
+function onTouchEnd(e) {
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    const t = e.changedTouches[i];
+    if (touchJoystick.active && t.identifier === touchJoystick.id) {
+      touchJoystick.active = false;
+      touchJoystick.id     = null;
+      touchJoystick.dx     = 0;
+      touchJoystick.dy     = 0;
+    }
+    if (t.identifier === touchFireId) {
+      touchFiring = false;
+      touchFireId = null;
     }
   }
+}
 
-  function handleTouchEnd(e) {
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const touch = e.changedTouches[i];
-      if (touch.identifier === touchJoystick.id) {
-        touchJoystick.active = false;
-        touchJoystick.id = -1;
-        touchJoystick.dx = 0;
-        touchJoystick.dy = 0;
-      }
-      if (touch.identifier === touchFireId) {
-        touchFiring = false;
-        touchFireId = -1;
-      }
-      delete activeTouches[touch.identifier];
-    }
-  }
-})();
-
-// Draw touch controls on canvas (called from render)
+// ── Render touch controls on top of game canvas ────────────────────────────
 function renderTouchControls() {
   if (!isTouchDevice) return;
   ctx.save();
-  ctx.globalAlpha = 0.7;
 
-  // Draw joystick base (at touch origin when active, default position when idle)
-  const jx = touchJoystick.active ? touchJoystick.cx : joyConf.cx;
-  const jy = touchJoystick.active ? touchJoystick.cy : joyConf.cy;
+  // Joystick base ring
+  const jx = touchJoystick.active ? touchJoystick.cx : joyBase.cx;
+  const jy = touchJoystick.active ? touchJoystick.cy : joyBase.cy;
   ctx.beginPath();
-  ctx.arc(jx, jy, joyConf.baseR, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.arc(jx, jy, joyBase.r, 0, Math.PI * 2);
+  ctx.fillStyle   = 'rgba(255,255,255,0.06)';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth   = 2;
   ctx.stroke();
-
-  // Draw joystick knob
-  const kx = touchJoystick.active ? touchJoystick.knobX : joyConf.cx;
-  const ky = touchJoystick.active ? touchJoystick.knobY : joyConf.cy;
+  // Joystick knob
+  const kx = touchJoystick.active ? touchJoystick.knobX : joyBase.cx;
+  const ky = touchJoystick.active ? touchJoystick.knobY : joyBase.cy;
   ctx.beginPath();
-  ctx.arc(kx, ky, joyConf.knobR, 0, Math.PI * 2);
-  ctx.fillStyle = touchJoystick.active ? 'rgba(0,255,255,0.5)' : 'rgba(0,255,255,0.25)';
+  ctx.arc(kx, ky, joyBase.knobR, 0, Math.PI * 2);
+  ctx.fillStyle   = touchJoystick.active ? 'rgba(0,255,255,0.45)' : 'rgba(0,255,255,0.22)';
   ctx.fill();
   ctx.strokeStyle = '#00ffff';
-  ctx.lineWidth = 2;
+  ctx.lineWidth   = 2;
   ctx.stroke();
 
-  // Draw action buttons
-  ctx.globalAlpha = 0.85;
+  // Action buttons
   for (const key in touchBtns) {
-    const btn = touchBtns[key];
-    const isActive = (key === 'fire' && touchFiring);
+    const btn      = touchBtns[key];
+    const isActive = key === 'fire' && touchFiring;
     ctx.beginPath();
     ctx.arc(btn.cx, btn.cy, btn.r, 0, Math.PI * 2);
-    ctx.fillStyle = isActive ? btn.color + '66' : btn.bg;
+    ctx.fillStyle   = isActive ? btn.color.replace(')', ',0.4)').replace('rgb', 'rgba') : btn.bg;
     ctx.fill();
     ctx.strokeStyle = btn.color;
-    ctx.lineWidth = isActive ? 3 : 2;
+    ctx.lineWidth   = isActive ? 3 : 2;
     ctx.stroke();
-    ctx.fillStyle = btn.color;
-    ctx.font = 'bold 13px Courier New';
-    ctx.textAlign = 'center';
+    ctx.fillStyle   = btn.color;
+    ctx.font        = 'bold 13px Courier New';
+    ctx.textAlign   = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(btn.label, btn.cx, btn.cy);
   }
 
-  ctx.globalAlpha = 1;
-  ctx.textAlign = 'left';
+  ctx.textAlign    = 'left';
   ctx.textBaseline = 'alphabetic';
   ctx.restore();
 }
