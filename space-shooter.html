@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>SPACE DESTROYER - Shoot The Ugly Aliens!</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
+  html, body {
     background: #000;
     display: flex;
     flex-direction: column;
@@ -15,15 +15,21 @@
     min-height: 100vh;
     font-family: 'Courier New', monospace;
     overflow: hidden;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   #gameContainer {
     position: relative;
     display: inline-block;
+    touch-action: none;
   }
   canvas {
     display: block;
     border: 2px solid #00ffff;
     box-shadow: 0 0 30px #00ffff, 0 0 60px #0044ff;
+    touch-action: none;
   }
   #ui {
     position: absolute;
@@ -41,6 +47,7 @@
     border-radius: 6px;
     padding: 6px 10px;
     min-width: 150px;
+    pointer-events: none;
   }
   .ui-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
   .ui-label { color: #aaa; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
@@ -69,77 +76,7 @@
     white-space: nowrap;
     z-index: 10;
   }
-  /* Touch controls */
-  #touch-controls {
-    display: none;
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 180px;
-    pointer-events: none;
-    z-index: 15;
-  }
-  .touch-btn {
-    position: absolute;
-    pointer-events: auto;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: 'Courier New', monospace;
-    font-weight: bold;
-    user-select: none;
-    -webkit-user-select: none;
-    touch-action: none;
-  }
-  #touch-fire {
-    right: 20px; bottom: 30px;
-    width: 70px; height: 70px;
-    background: rgba(0,255,255,0.25);
-    border: 2px solid #00ffff;
-    color: #00ffff;
-    font-size: 11px;
-  }
-  #touch-missile {
-    right: 100px; bottom: 55px;
-    width: 56px; height: 56px;
-    background: rgba(255,136,0,0.25);
-    border: 2px solid #ff8800;
-    color: #ff8800;
-    font-size: 10px;
-  }
-  #touch-nuke {
-    right: 100px; bottom: 0px;
-    width: 56px; height: 56px;
-    background: rgba(255,34,0,0.25);
-    border: 2px solid #ff2200;
-    color: #ff2200;
-    font-size: 10px;
-  }
-  #touch-joystick-area {
-    position: absolute;
-    left: 10px; bottom: 10px;
-    width: 160px; height: 160px;
-    pointer-events: auto;
-    touch-action: none;
-  }
-  #touch-joystick-base {
-    position: absolute;
-    left: 20px; bottom: 20px;
-    width: 120px; height: 120px;
-    border-radius: 50%;
-    background: rgba(255,255,255,0.08);
-    border: 2px solid rgba(255,255,255,0.2);
-  }
-  #touch-joystick-knob {
-    position: absolute;
-    left: 60px; bottom: 60px;
-    width: 44px; height: 44px;
-    margin-left: -22px; margin-bottom: -22px;
-    border-radius: 50%;
-    background: rgba(0,255,255,0.35);
-    border: 2px solid #00ffff;
-    pointer-events: none;
-  }
+  /* Touch controls - rendered on canvas, no HTML needed */
   #overlay {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -205,16 +142,6 @@
     </div>
   </div>
   <div id="controls-hint">WASD/Arrows: Move &nbsp;|&nbsp; Z: Shoot &nbsp;|&nbsp; X: Missile &nbsp;|&nbsp; C: Nuke &nbsp;|&nbsp; Hold for auto-fire</div>
-  <div id="touch-controls">
-    <div id="touch-joystick-area">
-      <div id="touch-joystick-base">
-        <div id="touch-joystick-knob"></div>
-      </div>
-    </div>
-    <div id="touch-fire" class="touch-btn">FIRE</div>
-    <div id="touch-missile" class="touch-btn">MSL</div>
-    <div id="touch-nuke" class="touch-btn">NUKE</div>
-  </div>
   <div id="overlay">
     <h1>SPACE DESTROYER</h1>
     <p style="color:#ff6644;font-size:16px;margin-bottom:16px;">The ugly aliens are invading! Exterminate them ALL!</p>
@@ -241,6 +168,21 @@ const ctx = canvas.getContext('2d');
 const W = 800, H = 700;
 canvas.width = W;
 canvas.height = H;
+
+// Scale canvas to fit mobile screens
+let canvasScale = 1;
+function resizeCanvas() {
+  const maxW = window.innerWidth - 4;
+  const maxH = window.innerHeight - 4;
+  const scaleW = maxW / W;
+  const scaleH = maxH / H;
+  canvasScale = Math.min(scaleW, scaleH, 1);
+  canvas.style.width = (W * canvasScale) + 'px';
+  canvas.style.height = (H * canvasScale) + 'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 200));
 
 // ─── GAME STATE ───────────────────────────────────────────────────────────────
 let state = 'menu'; // menu | playing | levelup | gameover | win
@@ -1561,90 +1503,202 @@ function render() {
     ctx.textAlign = 'left';
   }
 
+  // Touch controls overlay (drawn on top)
+  if (state === 'playing') renderTouchControls();
+
   ctx.restore();
 }
 
 // ─── TOUCH CONTROLS ──────────────────────────────────────────────────────────
 const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-let touchJoystick = { active: false, id: null, cx: 0, cy: 0, dx: 0, dy: 0 };
+let touchJoystick = { active: false, id: -1, cx: 0, cy: 0, dx: 0, dy: 0, knobX: 0, knobY: 0 };
 let touchFiring = false;
+let touchFireId = -1;
+let activeTouches = {}; // track all active touches by identifier
 
-if (isTouchDevice) {
-  document.getElementById('touch-controls').style.display = 'block';
-  document.getElementById('controls-hint').textContent = 'Joystick: Move | FIRE: Shoot | MSL: Missile | NUKE: Nuke';
+// Touch button definitions in game (canvas) coordinates
+const touchBtns = {
+  fire:    { cx: W - 65,  cy: H - 70,  r: 38, label: 'FIRE', color: '#00ffff', bg: 'rgba(0,255,255,0.2)' },
+  missile: { cx: W - 140, cy: H - 50,  r: 30, label: 'MSL',  color: '#ff8800', bg: 'rgba(255,136,0,0.2)' },
+  nuke:    { cx: W - 140, cy: H - 120, r: 30, label: 'NUKE', color: '#ff2200', bg: 'rgba(255,34,0,0.2)' },
+};
+// Joystick config in game coords
+const joyConf = { cx: 100, cy: H - 90, baseR: 60, knobR: 24, maxDist: 50 };
 
-  // Prevent scrolling/zooming on the game
-  document.addEventListener('touchmove', e => { if (e.target.closest('#gameContainer')) e.preventDefault(); }, { passive: false });
-  canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+// Convert touch screen coords to game canvas coords
+function touchToGame(touch) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (touch.clientX - rect.left) / canvasScale,
+    y: (touch.clientY - rect.top) / canvasScale
+  };
+}
 
-  // Joystick
-  const joystickArea = document.getElementById('touch-joystick-area');
-  const joystickBase = document.getElementById('touch-joystick-base');
-  const joystickKnob = document.getElementById('touch-joystick-knob');
+function hitBtn(gp, btn) {
+  return Math.hypot(gp.x - btn.cx, gp.y - btn.cy) < btn.r + 15;
+}
 
-  joystickArea.addEventListener('touchstart', e => {
-    e.preventDefault();
-    const touch = e.changedTouches[0];
-    touchJoystick.active = true;
-    touchJoystick.id = touch.identifier;
-    const rect = joystickBase.getBoundingClientRect();
-    touchJoystick.cx = rect.left + rect.width / 2;
-    touchJoystick.cy = rect.top + rect.height / 2;
-    updateJoystick(touch);
-  }, { passive: false });
+// Set up all touch handling
+(function setupTouch() {
+  if (!isTouchDevice) return;
 
-  document.addEventListener('touchmove', e => {
-    if (!touchJoystick.active) return;
-    for (let t of e.changedTouches) {
-      if (t.identifier === touchJoystick.id) {
-        updateJoystick(t);
-        break;
-      }
-    }
-  }, { passive: true });
+  document.getElementById('controls-hint').textContent = 'Touch: Drag left side to move | Right side: FIRE / MSL / NUKE';
 
-  document.addEventListener('touchend', e => {
-    for (let t of e.changedTouches) {
-      if (t.identifier === touchJoystick.id) {
-        touchJoystick.active = false;
-        touchJoystick.dx = 0;
-        touchJoystick.dy = 0;
-        joystickKnob.style.transform = 'translate(0px, 0px)';
-        break;
-      }
+  // Also make the start button respond to touchend directly (some mobile browsers block onclick after preventDefault)
+  document.addEventListener('click', e => {
+    if (e.target && (e.target.id === 'startBtn' || e.target.closest('#startBtn'))) {
+      startGame();
     }
   });
 
-  function updateJoystick(touch) {
-    let dx = touch.clientX - touchJoystick.cx;
-    let dy = touch.clientY - touchJoystick.cy;
-    const maxR = 50;
-    const d = Math.hypot(dx, dy);
-    if (d > maxR) { dx = dx / d * maxR; dy = dy / d * maxR; }
-    touchJoystick.dx = dx / maxR; // -1 to 1
-    touchJoystick.dy = dy / maxR;
-    joystickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+  // Prevent default on canvas touches to stop scrolling/zooming/long-press
+  canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+  canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+  canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+  canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+
+  // Also prevent default on body to stop pull-to-refresh etc
+  document.body.addEventListener('touchmove', e => {
+    if (state === 'playing') e.preventDefault();
+  }, { passive: false });
+
+  function handleTouchStart(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (state !== 'playing') return;
+
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const touch = e.changedTouches[i];
+      const gp = touchToGame(touch);
+      activeTouches[touch.identifier] = { role: null };
+
+      // Check fire button
+      if (hitBtn(gp, touchBtns.fire)) {
+        touchFiring = true;
+        touchFireId = touch.identifier;
+        activeTouches[touch.identifier].role = 'fire';
+        continue;
+      }
+      // Check missile button
+      if (hitBtn(gp, touchBtns.missile)) {
+        fireMissile();
+        activeTouches[touch.identifier].role = 'missile';
+        continue;
+      }
+      // Check nuke button
+      if (hitBtn(gp, touchBtns.nuke)) {
+        fireNuke();
+        activeTouches[touch.identifier].role = 'nuke';
+        continue;
+      }
+      // Any touch on left ~60% of screen = joystick
+      if (gp.x < W * 0.6 && !touchJoystick.active) {
+        touchJoystick.active = true;
+        touchJoystick.id = touch.identifier;
+        touchJoystick.cx = gp.x;
+        touchJoystick.cy = gp.y;
+        touchJoystick.dx = 0;
+        touchJoystick.dy = 0;
+        touchJoystick.knobX = gp.x;
+        touchJoystick.knobY = gp.y;
+        activeTouches[touch.identifier].role = 'joystick';
+      }
+    }
   }
 
-  // Fire button (hold for auto-fire)
-  const fireBtn = document.getElementById('touch-fire');
-  fireBtn.addEventListener('touchstart', e => { e.preventDefault(); touchFiring = true; }, { passive: false });
-  fireBtn.addEventListener('touchend', e => { touchFiring = false; });
-  fireBtn.addEventListener('touchcancel', e => { touchFiring = false; });
-
-  // Missile button
-  const mslBtn = document.getElementById('touch-missile');
-  mslBtn.addEventListener('touchstart', e => {
+  function handleTouchMove(e) {
     e.preventDefault();
-    if (state === 'playing') fireMissile();
-  }, { passive: false });
+    e.stopPropagation();
 
-  // Nuke button
-  const nukeBtn = document.getElementById('touch-nuke');
-  nukeBtn.addEventListener('touchstart', e => {
-    e.preventDefault();
-    if (state === 'playing') fireNuke();
-  }, { passive: false });
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const touch = e.changedTouches[i];
+      // Joystick drag
+      if (touch.identifier === touchJoystick.id && touchJoystick.active) {
+        const gp = touchToGame(touch);
+        let dx = gp.x - touchJoystick.cx;
+        let dy = gp.y - touchJoystick.cy;
+        const d = Math.hypot(dx, dy);
+        if (d > joyConf.maxDist) {
+          dx = dx / d * joyConf.maxDist;
+          dy = dy / d * joyConf.maxDist;
+        }
+        touchJoystick.dx = dx / joyConf.maxDist;
+        touchJoystick.dy = dy / joyConf.maxDist;
+        touchJoystick.knobX = touchJoystick.cx + dx;
+        touchJoystick.knobY = touchJoystick.cy + dy;
+      }
+    }
+  }
+
+  function handleTouchEnd(e) {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const touch = e.changedTouches[i];
+      if (touch.identifier === touchJoystick.id) {
+        touchJoystick.active = false;
+        touchJoystick.id = -1;
+        touchJoystick.dx = 0;
+        touchJoystick.dy = 0;
+      }
+      if (touch.identifier === touchFireId) {
+        touchFiring = false;
+        touchFireId = -1;
+      }
+      delete activeTouches[touch.identifier];
+    }
+  }
+})();
+
+// Draw touch controls on canvas (called from render)
+function renderTouchControls() {
+  if (!isTouchDevice) return;
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+
+  // Draw joystick base (at touch origin when active, default position when idle)
+  const jx = touchJoystick.active ? touchJoystick.cx : joyConf.cx;
+  const jy = touchJoystick.active ? touchJoystick.cy : joyConf.cy;
+  ctx.beginPath();
+  ctx.arc(jx, jy, joyConf.baseR, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Draw joystick knob
+  const kx = touchJoystick.active ? touchJoystick.knobX : joyConf.cx;
+  const ky = touchJoystick.active ? touchJoystick.knobY : joyConf.cy;
+  ctx.beginPath();
+  ctx.arc(kx, ky, joyConf.knobR, 0, Math.PI * 2);
+  ctx.fillStyle = touchJoystick.active ? 'rgba(0,255,255,0.5)' : 'rgba(0,255,255,0.25)';
+  ctx.fill();
+  ctx.strokeStyle = '#00ffff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Draw action buttons
+  ctx.globalAlpha = 0.85;
+  for (const key in touchBtns) {
+    const btn = touchBtns[key];
+    const isActive = (key === 'fire' && touchFiring);
+    ctx.beginPath();
+    ctx.arc(btn.cx, btn.cy, btn.r, 0, Math.PI * 2);
+    ctx.fillStyle = isActive ? btn.color + '66' : btn.bg;
+    ctx.fill();
+    ctx.strokeStyle = btn.color;
+    ctx.lineWidth = isActive ? 3 : 2;
+    ctx.stroke();
+    ctx.fillStyle = btn.color;
+    ctx.font = 'bold 13px Courier New';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(btn.label, btn.cx, btn.cy);
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.restore();
 }
 
 // Init stars on load
