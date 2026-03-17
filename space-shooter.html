@@ -83,7 +83,43 @@
     .ui-label { font-size: 9px; }
     .ui-value { font-size: 11px; }
   }
-  /* Touch controls - rendered on canvas, no HTML needed */
+  /* ── HTML Touch Controls ────────────────────────────────────────────── */
+  #tctrl {
+    display: none;
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 8;
+    pointer-events: none;
+  }
+  #joy-zone {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 55%;
+    pointer-events: auto;
+    touch-action: none;
+  }
+  .tc-btn {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: auto;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    font-size: 12px;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #tc-fire { right: 4%; bottom: 8%; width: 18%; aspect-ratio: 1; background: rgba(0,255,255,0.18); border: 2px solid #00ffff; color: #00ffff; }
+  #tc-msl  { right: 24%; bottom: 6%; width: 13%; aspect-ratio: 1; background: rgba(255,136,0,0.18); border: 2px solid #ff8800; color: #ff8800; }
+  #tc-nuke { right: 24%; bottom: 28%; width: 13%; aspect-ratio: 1; background: rgba(255,34,0,0.18); border: 2px solid #ff2200; color: #ff2200; }
+  #tc-fire.pressed { background: rgba(0,255,255,0.4); }
+  #tc-msl.pressed  { background: rgba(255,136,0,0.4); }
+  #tc-nuke.pressed { background: rgba(255,34,0,0.4); }
+  /* ── End Touch Controls ─────────────────────────────────────────────── */
   #overlay {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -149,6 +185,13 @@
     </div>
   </div>
   <div id="controls-hint">WASD/Arrows: Move &nbsp;|&nbsp; Z: Shoot &nbsp;|&nbsp; X: Missile &nbsp;|&nbsp; C: Nuke &nbsp;|&nbsp; Hold for auto-fire</div>
+  <!-- Touch controls: HTML overlay so browser handles hit testing natively -->
+  <div id="tctrl">
+    <div id="joy-zone"></div>
+    <div id="tc-fire" class="tc-btn">FIRE</div>
+    <div id="tc-msl"  class="tc-btn">MSL</div>
+    <div id="tc-nuke" class="tc-btn">NUKE</div>
+  </div>
   <div id="overlay">
     <h1>SPACE DESTROYER</h1>
     <p style="color:#ff6644;font-size:16px;margin-bottom:16px;">The ugly aliens are invading! Exterminate them ALL!</p>
@@ -1521,162 +1564,154 @@ function render() {
 }
 
 // ─── TOUCH CONTROLS ──────────────────────────────────────────────────────────
+// Uses HTML overlay divs so the browser does all hit-testing natively.
+// No coordinate conversion needed — just screen-pixel touch deltas.
+
 const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 
-// Touch state - simple flat vars, no nesting
-let touchJoystick = { active: false, id: null, cx: 0, cy: 0, dx: 0, dy: 0, knobX: 0, knobY: 0 };
+// Joystick state (screen-pixel coords)
+let joyActive = false, joyId = null;
+let joyStartX = 0, joyStartY = 0;
+let joyDx = 0, joyDy = 0;          // normalised [-1..1] movement
+let joyKnobOffX = 0, joyKnobOffY = 0; // pixel offset for canvas drawing
+
+// Fire hold state
 let touchFiring = false;
 let touchFireId = null;
 
-// Touch buttons in game (canvas) coordinates — large hit areas for fingers
-const touchBtns = {
-  fire:    { cx: W - 65,  cy: H - 70,  r: 42, label: 'FIRE', color: '#00ffff', bg: 'rgba(0,255,255,0.18)' },
-  missile: { cx: W - 148, cy: H - 42,  r: 34, label: 'MSL',  color: '#ff8800', bg: 'rgba(255,136,0,0.18)' },
-  nuke:    { cx: W - 148, cy: H - 126, r: 34, label: 'NUKE', color: '#ff2200', bg: 'rgba(255,34,0,0.18)' },
-};
-// Default joystick position shown when idle
-const joyBase = { cx: 100, cy: H - 95, r: 58, knobR: 26, maxDist: 52 };
-
-// Convert raw clientX/Y to game canvas coordinates
-function clientToGame(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: (clientX - rect.left) / canvasScale,
-    y: (clientY - rect.top)  / canvasScale
-  };
-}
+// Joystick canvas-draw config (fixed bottom-left position in game coords)
+const joyDraw = { cx: 100, cy: H - 95, r: 58, knobR: 26, maxPx: 55 };
 
 if (isTouchDevice) {
-  // Listen on the whole document so touches outside scaled canvas still work,
-  // but gate logic on whether the point is within the canvas.
-  document.addEventListener('touchstart',  onTouchStart,  { passive: false });
-  document.addEventListener('touchmove',   onTouchMove,   { passive: false });
-  document.addEventListener('touchend',    onTouchEnd,    { passive: false });
-  document.addEventListener('touchcancel', onTouchEnd,    { passive: false });
-}
+  document.getElementById('tctrl').style.display = 'block';
 
-function onTouchStart(e) {
-  // Let the LAUNCH / PLAY AGAIN button work normally
-  const tgt = e.target;
-  if (tgt && (tgt.id === 'startBtn' || (tgt.closest && tgt.closest('#overlay')))) return;
+  // ── Joystick zone ──────────────────────────────────────────────────────
+  const joyZone = document.getElementById('joy-zone');
 
-  e.preventDefault();
-  if (state !== 'playing') return;
+  joyZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (state !== 'playing') return;
+    const t = e.changedTouches[0];
+    joyActive   = true;
+    joyId       = t.identifier;
+    joyStartX   = t.clientX;
+    joyStartY   = t.clientY;
+    joyDx = joyDy = joyKnobOffX = joyKnobOffY = 0;
+  }, { passive: false });
 
-  for (let i = 0; i < e.changedTouches.length; i++) {
-    const t  = e.changedTouches[i];
-    const gp = clientToGame(t.clientX, t.clientY);
-
-    // Ignore if touch lands outside the canvas
-    if (gp.x < 0 || gp.x > W || gp.y < 0 || gp.y > H) continue;
-
-    // ── Right-side action buttons ──────────────────────────────────────────
-    if (Math.hypot(gp.x - touchBtns.fire.cx,    gp.y - touchBtns.fire.cy)    <= touchBtns.fire.r + 10) {
-      touchFiring = true;
-      touchFireId = t.identifier;
-      continue;
+  // Drag must be tracked on document (finger can leave the zone div)
+  document.addEventListener('touchmove', e => {
+    if (!joyActive) return;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      if (t.identifier !== joyId) continue;
+      const dx = t.clientX - joyStartX;
+      const dy = t.clientY - joyStartY;
+      const d  = Math.hypot(dx, dy);
+      const maxPx = joyDraw.maxPx;
+      if (d === 0) { joyDx = joyDy = joyKnobOffX = joyKnobOffY = 0; break; }
+      const clamped = Math.min(d, maxPx);
+      joyDx = (dx / d) * (clamped / maxPx);
+      joyDy = (dy / d) * (clamped / maxPx);
+      // knob offset in GAME pixels (compensate for canvas scale)
+      joyKnobOffX = (dx / d) * (clamped / canvasScale);
+      joyKnobOffY = (dy / d) * (clamped / canvasScale);
+      break;
     }
-    if (Math.hypot(gp.x - touchBtns.missile.cx, gp.y - touchBtns.missile.cy) <= touchBtns.missile.r + 10) {
-      fireMissile();
-      continue;
-    }
-    if (Math.hypot(gp.x - touchBtns.nuke.cx,    gp.y - touchBtns.nuke.cy)    <= touchBtns.nuke.r + 10) {
-      fireNuke();
-      continue;
-    }
+  }, { passive: true });
 
-    // ── Left-side joystick — activate at finger position ───────────────────
-    if (!touchJoystick.active) {
-      touchJoystick.active = true;
-      touchJoystick.id     = t.identifier;
-      touchJoystick.cx     = gp.x;
-      touchJoystick.cy     = gp.y;
-      touchJoystick.dx     = 0;
-      touchJoystick.dy     = 0;
-      touchJoystick.knobX  = gp.x;
-      touchJoystick.knobY  = gp.y;
+  document.addEventListener('touchend',    releaseJoy);
+  document.addEventListener('touchcancel', releaseJoy);
+  function releaseJoy(e) {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === joyId) {
+        joyActive = false; joyId = null;
+        joyDx = joyDy = joyKnobOffX = joyKnobOffY = 0;
+        break;
+      }
     }
   }
-}
 
-function onTouchMove(e) {
-  e.preventDefault();
-  if (state !== 'playing') return;
-
-  for (let i = 0; i < e.changedTouches.length; i++) {
-    const t = e.changedTouches[i];
-    if (!touchJoystick.active || t.identifier !== touchJoystick.id) continue;
-
-    const gp = clientToGame(t.clientX, t.clientY);
-    let dx = gp.x - touchJoystick.cx;
-    let dy = gp.y - touchJoystick.cy;
-    const d = Math.hypot(dx, dy);
-    if (d > joyBase.maxDist) { dx = dx / d * joyBase.maxDist; dy = dy / d * joyBase.maxDist; }
-    touchJoystick.dx    = dx / joyBase.maxDist;
-    touchJoystick.dy    = dy / joyBase.maxDist;
-    touchJoystick.knobX = touchJoystick.cx + dx;
-    touchJoystick.knobY = touchJoystick.cy + dy;
-  }
-}
-
-function onTouchEnd(e) {
-  for (let i = 0; i < e.changedTouches.length; i++) {
-    const t = e.changedTouches[i];
-    if (touchJoystick.active && t.identifier === touchJoystick.id) {
-      touchJoystick.active = false;
-      touchJoystick.id     = null;
-      touchJoystick.dx     = 0;
-      touchJoystick.dy     = 0;
+  // ── FIRE button (hold) ─────────────────────────────────────────────────
+  const btnFire = document.getElementById('tc-fire');
+  btnFire.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (state !== 'playing') return;
+    touchFiring = true;
+    touchFireId = e.changedTouches[0].identifier;
+    btnFire.classList.add('pressed');
+  }, { passive: false });
+  const stopFire = e => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === touchFireId) {
+        touchFiring = false; touchFireId = null;
+        btnFire.classList.remove('pressed');
+        break;
+      }
     }
-    if (t.identifier === touchFireId) {
-      touchFiring = false;
-      touchFireId = null;
-    }
-  }
+  };
+  btnFire.addEventListener('touchend',    stopFire);
+  btnFire.addEventListener('touchcancel', stopFire);
+
+  // ── MISSILE button ─────────────────────────────────────────────────────
+  const btnMsl = document.getElementById('tc-msl');
+  btnMsl.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (state === 'playing') { fireMissile(); btnMsl.classList.add('pressed'); }
+  }, { passive: false });
+  btnMsl.addEventListener('touchend', () => btnMsl.classList.remove('pressed'));
+
+  // ── NUKE button ────────────────────────────────────────────────────────
+  const btnNuke = document.getElementById('tc-nuke');
+  btnNuke.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (state === 'playing') { fireNuke(); btnNuke.classList.add('pressed'); }
+  }, { passive: false });
+  btnNuke.addEventListener('touchend', () => btnNuke.classList.remove('pressed'));
+
+  // Stop pull-to-refresh / page scroll while playing
+  document.body.addEventListener('touchmove', e => {
+    if (state === 'playing') e.preventDefault();
+  }, { passive: false });
 }
 
-// ── Render touch controls on top of game canvas ────────────────────────────
+// Apply joystick to player movement (called from update)
+// Uses joyDx/joyDy which are always in [-1..1]
+// (touchJoystick is kept as alias so update() still works)
+const touchJoystick = { get active() { return joyActive; }, get dx() { return joyDx; }, get dy() { return joyDy; } };
+
+// Draw joystick indicator on canvas (buttons are HTML, no need to draw them)
 function renderTouchControls() {
   if (!isTouchDevice) return;
   ctx.save();
 
-  // Joystick base ring
-  const jx = touchJoystick.active ? touchJoystick.cx : joyBase.cx;
-  const jy = touchJoystick.active ? touchJoystick.cy : joyBase.cy;
+  // Base ring — always at fixed bottom-left
   ctx.beginPath();
-  ctx.arc(jx, jy, joyBase.r, 0, Math.PI * 2);
+  ctx.arc(joyDraw.cx, joyDraw.cy, joyDraw.r, 0, Math.PI * 2);
   ctx.fillStyle   = 'rgba(255,255,255,0.06)';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.strokeStyle = joyActive ? 'rgba(0,255,255,0.5)' : 'rgba(255,255,255,0.18)';
   ctx.lineWidth   = 2;
   ctx.stroke();
-  // Joystick knob
-  const kx = touchJoystick.active ? touchJoystick.knobX : joyBase.cx;
-  const ky = touchJoystick.active ? touchJoystick.knobY : joyBase.cy;
+
+  // Knob — offset by drag in game-pixel coords
+  const kx = joyDraw.cx + joyKnobOffX;
+  const ky = joyDraw.cy + joyKnobOffY;
   ctx.beginPath();
-  ctx.arc(kx, ky, joyBase.knobR, 0, Math.PI * 2);
-  ctx.fillStyle   = touchJoystick.active ? 'rgba(0,255,255,0.45)' : 'rgba(0,255,255,0.22)';
+  ctx.arc(kx, ky, joyDraw.knobR, 0, Math.PI * 2);
+  ctx.fillStyle   = joyActive ? 'rgba(0,255,255,0.5)' : 'rgba(0,255,255,0.2)';
   ctx.fill();
   ctx.strokeStyle = '#00ffff';
   ctx.lineWidth   = 2;
   ctx.stroke();
 
-  // Action buttons
-  for (const key in touchBtns) {
-    const btn      = touchBtns[key];
-    const isActive = key === 'fire' && touchFiring;
-    ctx.beginPath();
-    ctx.arc(btn.cx, btn.cy, btn.r, 0, Math.PI * 2);
-    ctx.fillStyle   = isActive ? btn.color.replace(')', ',0.4)').replace('rgb', 'rgba') : btn.bg;
-    ctx.fill();
-    ctx.strokeStyle = btn.color;
-    ctx.lineWidth   = isActive ? 3 : 2;
-    ctx.stroke();
-    ctx.fillStyle   = btn.color;
-    ctx.font        = 'bold 13px Courier New';
+  // Direction arrows hint when idle
+  if (!joyActive) {
+    ctx.fillStyle   = 'rgba(0,255,255,0.3)';
+    ctx.font        = '18px sans-serif';
     ctx.textAlign   = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(btn.label, btn.cx, btn.cy);
+    ctx.fillText('✦', joyDraw.cx, joyDraw.cy);
   }
 
   ctx.textAlign    = 'left';
