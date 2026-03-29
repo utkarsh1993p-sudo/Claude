@@ -319,15 +319,15 @@ function explosion(x, y, color='#ff6600', count=18, spread=4) {
 }
 
 // ─── ALIEN DESIGNS ────────────────────────────────────────────────────────────
-// Types: 0=Blob, 1=SpiderCrab, 2=SkullHead, 3=Tentacle, 4=BugEyes
-// Boss types: 5=BigBoss, 6=HydraBoss, 7=MechaBoss
+// Types: 0=BioMech, 1=MechDrone, 2=PhantomSkull, 3=VoidSqid, 4=AssaultBug
+// Boss types: 5=BioTitan, 6=OrbitalStation, 7=MechDreadnought
 
 function drawAlien(ctx, x, y, type, hp, maxHp, frame, w=40, h=40, isBoss=false) {
   ctx.save();
   ctx.translate(x, y);
   const t = frame / 60;
 
-  if (type === 0) { // Blob alien - pulsating green slime
+  if (type === 0) { // BioMech Organism — dark chitinous carapace, exposed bio-core
     const pulse = 1 + Math.sin(t * 3) * 0.08;
     ctx.save();
     ctx.scale(pulse, pulse);
